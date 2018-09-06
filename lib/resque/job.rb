@@ -19,6 +19,10 @@ module Resque
     # abort the job.
     DontPerform = Class.new(StandardError)
 
+    # Raise Resque::Job::DontReserve from a before_reserve hook to
+    # stop the worker from taking a job from the queue.
+    DontReserve = Class.new(StandardError)
+
     # The worker object which is currently processing this job.
     attr_accessor :worker
 
@@ -91,11 +95,37 @@ module Resque
       destroyed
     end
 
-    # Given a string queue name, returns an instance of Resque::Job
-    # if any jobs are available. If not, returns nil.
-    def self.reserve(queue)
-      return unless payload = Resque.pop(queue)
-      new(queue, payload)
+    # Attempt to reserve a Resque::Job.
+    #
+    # queues  - An Array of String queue names to check
+    # timeout - Integer number of seconds to block when retrieving jobs.
+    #           Defaults to 5.
+    #
+    # Returns a Resque::Job or falsey.
+    def self.reserve(queues, timeout=5)
+      return if queues.empty?
+      queue, payload = Resque.pop(queues, timeout)
+      payload && new(queue, payload)
+    end
+
+    # Run before_reserve hooks on the given list of queues to determine which
+    # are available for reserving jobs.
+    #
+    # Returns an Array of queue names, which may be empty.
+    def self.reservable_queues(queues)
+      Array(queues).select do |queue|
+        begin
+          run_before_reserve_hook(queue)
+          true
+        rescue DontReserve
+          false
+        end
+      end
+    end
+
+    # Run the before_reserve hook if it's set.
+    def self.run_before_reserve_hook(queue)
+      Resque.before_reserve && Resque.before_reserve.call(queue)
     end
 
     # Attempts to perform the work represented by this job instance.
@@ -210,14 +240,16 @@ module Resque
       @after_hooks ||= Plugin.after_hooks(payload_class)
     end
 
-    def failure_hooks 
+    def failure_hooks
       @failure_hooks ||= Plugin.failure_hooks(payload_class)
+    rescue NameError
+      # if the payload class doesn't exist, there aro hooks
+      []
     end
-    
+
     def run_failure_hooks(exception)
       job_args = args || []
       failure_hooks.each { |hook| payload_class.send(hook, exception, *job_args) }
     end
-
   end
 end

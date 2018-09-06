@@ -1,3 +1,5 @@
+require "socket"
+
 module Resque
   # A Resque Worker processes jobs. On platforms that support fork(2),
   # the worker will fork off a child to process each job. This ensures
@@ -24,7 +26,7 @@ module Resque
 
     # Returns an array of all worker objects.
     def self.all
-      Array(redis.smembers(:workers)).map { |id| find(id) }.compact
+      Array(redis.smembers(:workers)).map { |id| find(id, true) }.compact
     end
 
     # Returns an array of all worker objects currently processing
@@ -49,13 +51,13 @@ module Resque
       end
 
       reportedly_working.keys.map do |key|
-        find key.sub("worker:", '')
+        find(key.sub("worker:", ''), true)
       end.compact
     end
 
     # Returns a single worker object. Accepts a string id.
-    def self.find(worker_id)
-      if exists? worker_id
+    def self.find(worker_id, skip_exists = false)
+      if skip_exists || exists?(worker_id)
         queues = worker_id.split(':')[-1].split(',')
         worker = new(*queues)
         worker.to_s = worker_id
@@ -88,6 +90,7 @@ module Resque
     # in alphabetical order. Queues can be dynamically added or
     # removed without needing to restart workers using this method.
     def initialize(*queues)
+      @current_job = nil
       @queues = queues.map { |queue| queue.to_s.strip }
       validate_queues
     end
@@ -112,21 +115,25 @@ module Resque
     # 2. Work loop: Jobs are pulled from a queue and processed.
     # 3. Teardown:  This worker is unregistered.
     #
-    # Can be passed a float representing the polling frequency.
+    # Can be passed an integer representing the polling frequency.
     # The default is 5 seconds, but for a semi-active site you may
     # want to use a smaller value.
     #
     # Also accepts a block which will be passed the job as soon as it
     # has completed processing. Useful for testing.
-    def work(interval = 5.0, &block)
-      interval = Float(interval)
+    def work(interval = 5, &block)
+      interval = Integer(interval)
       $0 = "resque: Starting"
       startup
 
       loop do
         break if shutdown?
 
-        if not paused? and job = reserve
+        if !paused?
+          procline "Waiting for #{@queues.join(',')}"
+        end
+
+        if !paused? && job = reserve(interval)
           log "got: #{job.inspect}"
           job.worker = self
           run_hook :before_fork, job
@@ -144,11 +151,14 @@ module Resque
 
           done_working
           @child = nil
+
+          run_hook :after_perform, self
         else
-          break if interval.zero?
-          log! "Sleeping for #{interval} seconds"
-          procline paused? ? "Paused" : "Waiting for #{@queues.join(',')}"
-          sleep interval
+          break if interval.zero? # for testing
+          if paused?
+            procline "Paused"
+            sleep interval
+          end
         end
       end
 
@@ -171,6 +181,7 @@ module Resque
     # Processes a given job in the child.
     def perform(job)
       begin
+        @current_job = job
         run_hook :after_fork, job
         job.perform
       rescue Object => e
@@ -180,25 +191,35 @@ module Resque
         rescue Object => e
           log "Received exception when reporting failure: #{e.inspect}"
         end
-        failed!
+        Stat << "failed"
       else
         log "done: #{job.inspect}"
       ensure
+        @current_job = nil
         yield job if block_given?
       end
     end
 
     # Attempts to grab a job off one of the provided queues. Returns
     # nil if no job can be found.
-    def reserve
-      queues.each do |queue|
-        log! "Checking #{queue}"
-        if job = Resque.reserve(queue)
-          log! "Found job on #{queue}"
-          return job
-        end
+    #
+    # The timeout defines how long to wait for a blocking pop, if any queues are
+    # available to check for jobs, or how long to sleep if no queues are
+    # available. Queues may not be available because resque hasn't created or
+    # tracked any queues yet, or because no queues are passing their
+    # before_reserve hooks.
+    #
+    # timeout - an Integer timeout in seconds. Defaults to 5.
+    #
+    # Returns a Job or nil.
+    def reserve(timeout=5)
+      available_queues = Job.reservable_queues(queues)
+      if available_queues.empty?
+        sleep timeout # prevent busy-wait.
+      elsif job = Job.reserve(available_queues, timeout)
+        log! "Found job on #{job.queue}"
+        return job
       end
-
       nil
     rescue Exception => e
       log "Error reserving job: #{e.inspect}"
@@ -237,8 +258,7 @@ module Resque
     def startup
       enable_gc_optimizations
       register_signal_handlers
-      prune_dead_workers
-      run_hook :before_first_fork
+      run_hook :before_first_fork, self
       register_worker
 
       # Fix buffering so we can `rake resque:work > resque.log` and
@@ -307,6 +327,8 @@ module Resque
           log! "Child #{@child} not found, restarting."
           shutdown
         end
+      elsif @cant_fork && @current_job
+        raise Resque::DirtyExit, "Worker killed while processing job"
       end
     end
 
@@ -342,7 +364,7 @@ module Resque
       all_workers = Worker.all
       known_workers = worker_pids unless all_workers.empty?
       all_workers.each do |worker|
-        host, pid, queues = worker.id.split(':')
+        host, pid = worker.id.split(':')
         next unless host == hostname
         next if known_workers.include?(pid)
         log! "Pruning dead worker: #{worker}"
@@ -353,8 +375,10 @@ module Resque
     # Registers ourself as a worker. Useful when entering the worker
     # lifecycle on startup.
     def register_worker
-      redis.sadd(:workers, self)
-      started!
+      redis.pipelined do
+        redis.sadd(:workers, self)
+        redis.set("worker:#{self}:queues", @queues.join(","))
+      end
     end
 
     # Runs a named hook, passing along any arguments.
@@ -379,12 +403,11 @@ module Resque
         job.fail(DirtyExit.new)
       end
 
-      redis.srem(:workers, self)
-      redis.del("worker:#{self}")
-      redis.del("worker:#{self}:started")
-
-      Stat.clear("processed:#{self}")
-      Stat.clear("failed:#{self}")
+      redis.pipelined do
+        redis.srem(:workers, self)
+        redis.del("worker:#{self}")
+        redis.del("worker:#{self}:queues")
+      end
     end
 
     # Given a job, tells Redis we're working on it. Useful for seeing
@@ -392,7 +415,7 @@ module Resque
     def working_on(job)
       data = encode \
         :queue   => job.queue,
-        :run_at  => Time.now.strftime("%Y/%m/%d %H:%M:%S %Z"),
+        :run_at  => Time.now.utc.iso8601,
         :payload => job.payload
       redis.set("worker:#{self}", data)
     end
@@ -400,40 +423,10 @@ module Resque
     # Called when we are done working - clears our `working_on` state
     # and tells Redis we processed a job.
     def done_working
-      processed!
-      redis.del("worker:#{self}")
-    end
-
-    # How many jobs has this worker processed? Returns an int.
-    def processed
-      Stat["processed:#{self}"]
-    end
-
-    # Tell Redis we've processed a job.
-    def processed!
-      Stat << "processed"
-      Stat << "processed:#{self}"
-    end
-
-    # How many failed jobs has this worker seen? Returns an int.
-    def failed
-      Stat["failed:#{self}"]
-    end
-
-    # Tells Redis we've failed a job.
-    def failed!
-      Stat << "failed"
-      Stat << "failed:#{self}"
-    end
-
-    # What time did this worker start? Returns an instance of `Time`
-    def started
-      redis.get "worker:#{self}:started"
-    end
-
-    # Tell Redis we've started
-    def started!
-      redis.set("worker:#{self}:started", Time.now.to_s)
+      redis.pipelined do
+        Stat << "processed"
+        redis.del("worker:#{self}")
+      end
     end
 
     # Returns a hash explaining the Job we're currently processing, if any.
@@ -470,13 +463,13 @@ module Resque
     # The string representation is the same as the id for this worker
     # instance. Can be used with `Worker.find`.
     def to_s
-      @to_s ||= "#{hostname}:#{Process.pid}:#{@queues.join(',')}"
+      @to_s ||= "#{hostname}:#{Process.pid}:-"
     end
     alias_method :id, :to_s
 
-    # chomp'd hostname of this machine
+    # Hostname of this machine
     def hostname
-      @hostname ||= `hostname`.chomp
+      @hostname ||= Socket.gethostname
     end
 
     # Returns Integer PID of running worker

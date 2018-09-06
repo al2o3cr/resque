@@ -7,6 +7,7 @@ context "Resque::Worker" do
     Resque.before_first_fork = nil
     Resque.before_fork = nil
     Resque.after_fork = nil
+    Resque.before_reserve = nil
 
     @worker = Resque::Worker.new(:jobs)
     Resque::Job.create(:jobs, SomeJob, 20, '/tmp')
@@ -43,7 +44,7 @@ context "Resque::Worker" do
     def self.on_failure_record_failure(exception, *job_args)
       @@exception = exception
     end
-    
+
     def self.exception
       @@exception
     end
@@ -161,7 +162,7 @@ context "Resque::Worker" do
   end
 
   test "has a unique id" do
-    assert_equal "#{`hostname`.chomp}:#{$$}:jobs", @worker.to_s
+    assert_equal "#{`hostname`.chomp}:#{$$}:-", @worker.to_s
   end
 
   test "complains if no queues are given" do
@@ -232,41 +233,6 @@ context "Resque::Worker" do
     end
   end
 
-  test "keeps track of how many jobs it has processed" do
-    Resque::Job.create(:jobs, BadJob)
-    Resque::Job.create(:jobs, BadJob)
-
-    3.times do
-      job = @worker.reserve
-      @worker.process job
-    end
-    assert_equal 3, @worker.processed
-  end
-
-  test "keeps track of how many failures it has seen" do
-    Resque::Job.create(:jobs, BadJob)
-    Resque::Job.create(:jobs, BadJob)
-
-    3.times do
-      job = @worker.reserve
-      @worker.process job
-    end
-    assert_equal 2, @worker.failed
-  end
-
-  test "stats are erased when the worker goes away" do
-    @worker.work(0)
-    assert_equal 0, @worker.processed
-    assert_equal 0, @worker.failed
-  end
-
-  test "knows when it started" do
-    time = Time.now
-    @worker.work(0) do
-      assert_equal time.to_s, @worker.started.to_s
-    end
-  end
-
   test "knows whether it exists or not" do
     @worker.work(0) do
       assert Resque::Worker.exists?(@worker)
@@ -297,7 +263,7 @@ context "Resque::Worker" do
     end
   end
 
-  test "cleans up dead worker info on start (crash recovery)" do
+  test "cleans up dead worker when requested" do
     # first we fake out two dead workers
     workerA = Resque::Worker.new(:jobs)
     workerA.instance_variable_set(:@to_s, "#{`hostname`.chomp}:1:jobs")
@@ -310,12 +276,14 @@ context "Resque::Worker" do
     assert_equal 2, Resque.workers.size
 
     # then we prune them
+    @worker.prune_dead_workers
     @worker.work(0) do
       assert_equal 1, Resque.workers.size
     end
   end
 
   test "worker_pids returns pids" do
+    @worker.work(0) # to set a findable procline
     known_workers = @worker.worker_pids
     assert !known_workers.empty?
   end
@@ -382,7 +350,7 @@ context "Resque::Worker" do
   test "returns PID of running process" do
     assert_equal @worker.to_s.split(":")[1].to_i, @worker.pid
   end
-  
+
   test "requeue failed queue" do
     queue = 'good_job'
     Resque::Failure.create(:exception => Exception.new, :worker => Resque::Worker.new(queue), :queue => queue, :payload => {'class' => 'GoodJob'})
@@ -401,5 +369,14 @@ context "Resque::Worker" do
     Resque::Failure.remove_queue(queue)
     assert_equal queue2, Resque::Failure.all(0)['queue']
     assert_equal 1, Resque::Failure.count
+  end
+
+  test "before_reserve hook can stop a worker from pulling from queue" do
+    Resque.before_reserve do |queue|
+      raise Resque::Job::DontReserve if queue == "jobs"
+    end
+    worker = Resque::Worker.new(:jobs, :more_jobs)
+    worker.work(0)
+    assert_equal 1, Resque.size(:jobs)
   end
 end
