@@ -206,12 +206,6 @@ module Resque
     end
 
     class Workers
-      class << self
-        attr_accessor :track_starts
-      end
-
-      self.track_starts = true
-
       def initialize(redis)
         @redis = redis
       end
@@ -244,7 +238,7 @@ module Resque
       end
 
       def worker_started(worker)
-        if self.class.track_starts
+        if track_starts
           @redis.set(redis_key_for_worker_start_time(worker), Time.now.to_s)
         end
       end
@@ -253,7 +247,7 @@ module Resque
         @redis.pipelined do
           @redis.srem(:workers, worker)
           @redis.del(redis_key_for_worker(worker))
-          if self.class.track_starts
+          if track_starts
             @redis.del(redis_key_for_worker_start_time(worker))
           end
           @redis.hdel(HEARTBEAT_KEY, worker.to_s)
@@ -310,6 +304,10 @@ module Resque
 
       def redis_key_for_worker_pruning
         "pruning_dead_workers_in_progress"
+      end
+
+      def track_starts
+        Resque.track_starts
       end
     end
 
