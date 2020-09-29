@@ -1,15 +1,12 @@
-source :rubygems
+source "https://rubygems.org"
 
 gemspec
 
-group :test do
-  gem "rake"
-  gem "rack-test", "~> 0.5"
-  gem "mocha", "~> 0.9.7"
-  gem "leftright", :platforms => :mri_18
-  gem "yajl-ruby", "~>0.8.2", :platforms => :mri
-  gem "json", "~>1.5.3", :platforms => [:jruby, :rbx]
-  gem "hoptoad_notifier"
-  gem "airbrake"
-  gem "i18n"
-end
+gem "json"
+
+gem "minitest", "5.11.3"
+gem "mocha", :require => false
+gem "rack-test", "~> 0.5"
+gem "rake"
+gem "pry"
+gem "airbrake", require: false # to make airbrake backend test work

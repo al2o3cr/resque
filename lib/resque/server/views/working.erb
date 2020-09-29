@@ -1,5 +1,5 @@
-<% if params[:id] && (worker = Resque::Worker.find(params[:id])) && worker.job %>
-  <h1><%= worker %>'s job</h1>
+<% if params[:id] && (current_worker = Resque::Worker.find(params[:id])) && (data = current_worker.job) %>
+  <h1><%= current_worker %>'s job</h1>
 
   <table>
     <tr>
@@ -12,16 +12,16 @@
     </tr>
       <tr>
         <td><img src="<%=u 'working.png' %>" alt="working" title="working"></td>
-        <% host, pid, _ = worker.to_s.split(':') %>
-        <td><a href="<%=u "/workers/#{worker}" %>"><%= host %>:<%= pid %></a></td>
-        <% data = worker.job %>
+        <% host, pid, _ = current_worker.to_s.split(':') %>
+        <td><a href="<%=u "/workers/#{current_worker}" %>"><%= host %>:<%= pid %></a></td>
         <% queue = data['queue'] %>
         <td><a class="queue" href="<%=u "/queues/#{queue}" %>"><%= queue %></a></td>
         <td><span class="time"><%= data['run_at'] %></span></td>
+        <% payload = data.key?('payload') ? data['payload'] : {} %>
         <td>
-          <code><%= data['payload']['class'] %></code>
+          <code><%= payload.key?('class') ? payload['class'] : "—" %></code>
         </td>
-        <td><%=h data['payload']['args'].inspect %></td>
+        <td><%=h payload.key?('args') ? payload['args'].inspect : "—" %></td>
       </tr>
   </table>
 
@@ -49,18 +49,17 @@
     </tr>
     <% end %>
 
-    <% worker_jobs.sort_by {|w, j| j['run_at'] ? j['run_at'] : '' }.each do |worker, job| %>
+    <% worker_jobs.sort_by { |_w, j| j['run_at'] ? j['run_at'].to_s() : '' }.each do |worker, job| %>
       <tr>
         <td class='icon'><img src="<%=u state = worker.state %>.png" alt="<%= state %>" title="<%= state %>"></td>
-        <% host, pid, queues = worker.to_s.split(':') %>
+        <% host, pid, _queues = worker.to_s.split(':') %>
         <td class='where'><a href="<%=u "/workers/#{worker}" %>"><%= host %>:<%= pid %></a></td>
         <td class='queues queue'>
           <a class="queue-tag" href="<%=u "/queues/#{job['queue']}" %>"><%= job['queue'] %></a>
         </td>
         <td class='process'>
           <% if job['queue'] %>
-            <code><%= job['payload']['class'] %></code>
-            <small><a class="queue time" href="<%=u "/working/#{worker}" %>"><%= job['run_at'] %></a></small>
+            <%= partial :processing, :worker => worker, :job => job %>
           <% else %>
             <span class='waiting'>Waiting for a job...</span>
           <% end %>

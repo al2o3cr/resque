@@ -5,7 +5,7 @@ You can customize Resque or write plugins using its hook API. In many
 cases you can use a hook rather than mess with Resque's internals.
 
 For a list of available plugins see
-<http://wiki.github.com/defunkt/resque/plugins>.
+<http://wiki.github.com/resque/resque/plugins>.
 
 
 Worker Hooks
@@ -42,6 +42,10 @@ All worker hooks can also be set using a setter, e.g.
 
     Resque.after_fork = proc { puts "called" }
 
+
+Workers can also take advantage of running any code defined using Ruby's `at_exit` block by setting
+`ENV["RUN_AT_EXIT_HOOKS"]=1`. By default, this is turned off. Be advised that setting this value might execute
+code from gems which register their own `at_exit` hooks.
 
 Job Hooks
 ---------
@@ -84,7 +88,7 @@ The available hooks are:
   backend.
 
 * `after_perform`: Called with the job args after it performs. Uncaught
-  exceptions will propagate up to the `Resque::Failure` backend.
+  exceptions will propagate up to the `Resque::Failure` backend. *Note: If the job fails, `after_perform` hooks will not be run.*
 
 * `around_perform`: Called with the job args. It is expected to yield in order
   to perform the job (but is not required to do so). It may handle exceptions

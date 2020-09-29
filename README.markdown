@@ -1,6 +1,9 @@
 Resque
 ======
 
+[![Gem Version](https://badge.fury.io/rb/resque.svg)](https://rubygems.org/gems/resque)
+[![Build Status](https://travis-ci.org/resque/resque.svg)](https://travis-ci.org/resque/resque)
+
 Resque (pronounced like "rescue") is a Redis-backed library for creating
 background jobs, placing those jobs on multiple queues, and processing
 them later.
@@ -29,6 +32,9 @@ store jobs as simple JSON packages.
 The Resque frontend tells you what workers are doing, what workers are
 not doing, what queues you're using, what's in those queues, provides
 general usage stats, and helps you track failures.
+
+Resque now supports Ruby 2.3.0 and above.
+We will also only be supporting Redis 3.0 and above going forward.
 
 
 The Blog Post
@@ -191,9 +197,21 @@ We plan to provide first class `async` support in a future release.
 
 If a job raises an exception, it is logged and handed off to the
 `Resque::Failure` module. Failures are logged either locally in Redis
-or using some different backend.
+or using some different backend. To see exceptions while developing,
+see details below under Logging.
 
-For example, Resque ships with Hoptoad support.
+For example, Resque ships with Airbrake support. To configure it, put
+the following into an initialisation file or into your rake job:
+
+``` ruby
+# send errors which occur in background jobs to redis and airbrake
+require 'resque/failure/multiple'
+require 'resque/failure/redis'
+require 'resque/failure/airbrake'
+
+Resque::Failure::Multiple.classes = [Resque::Failure::Redis, Resque::Failure::Airbrake]
+Resque::Failure.backend = Resque::Failure::Multiple
+```
 
 Keep this in mind when writing your jobs: you may want to throw
 exceptions you would not normally throw in order to assist debugging.
@@ -210,7 +228,7 @@ loop do
   if job = reserve
     job.process
   else
-    sleep 5 # Polling frequency = 5 
+    sleep 5 # Polling frequency = 5
   end
 end
 shutdown
@@ -251,12 +269,48 @@ but in the Resque workers it's fine.
 
 ### Logging
 
-Workers support basic logging to STDOUT. If you start them with the
-`VERBOSE` env variable set, they will print basic debugging
-information. You can also set the `VVERBOSE` (very verbose) env
-variable.
+Workers support basic logging to STDOUT.
 
-    $ VVERBOSE=1 QUEUE=file_serve rake environment resque:work
+You can control the logging threshold using `Resque.logger.level`:
+
+```ruby
+# config/initializers/resque.rb
+Resque.logger.level = Logger::DEBUG
+```
+
+If you want Resque to log to a file, in Rails do:
+
+```ruby
+# config/initializers/resque.rb
+Resque.logger = Logger.new(Rails.root.join('log', "#{Rails.env}_resque.log"))
+```
+
+### Storing Statistics
+ Resque allows to store count of processed and failed jobs.
+
+ By default it will store it in Redis using the keys `stats:processed` and `stats:failed`.
+
+ Some apps would want another stats store, or even a null store:
+
+ ```ruby
+# config/initializers/resque.rb
+class NullDataStore
+  def stat(stat)
+    0
+  end
+
+  def increment_stat(stat, by)
+  end
+
+  def decrement_stat(stat, by)
+  end
+
+  def clear_stat(stat)
+  end
+end
+
+Resque.stat_data_store = NullDataStore.new
+```
 
 ### Process IDs (PIDs)
 
@@ -267,7 +321,7 @@ worker process.  Use the PIDFILE option for easy access to the PID:
 
 ### Running in the background
 
-(Only supported with ruby >= 1.9). There are scenarios where it's helpful for
+There are scenarios where it's helpful for
 the resque worker to run itself in the background (usually in combination with
 PIDFILE).  Use the BACKGROUND option so that rake will return as soon as the
 worker is started.
@@ -277,7 +331,7 @@ worker is started.
 
 ### Polling frequency
 
-You can pass an INTERVAL option which is a float representing the polling frequency. 
+You can pass an INTERVAL option which is a float representing the polling frequency.
 The default is 5 seconds, but for a semi-active app you may want to use a smaller value.
 
     $ INTERVAL=0.1 QUEUE=file_serve rake environment resque:work
@@ -338,7 +392,7 @@ so using the `resque:workers` rake task:
 
     $ COUNT=5 QUEUE=* rake resque:workers
 
-This will spawn five Resque workers, each in its own thread. Hitting
+This will spawn five Resque workers, each in its own process. Hitting
 ctrl-c should be sufficient to stop them all.
 
 
@@ -427,11 +481,65 @@ If you want to stop processing jobs, but want to leave the worker running
 (for example, to temporarily alleviate load), use `USR2` to stop processing,
 then `CONT` to start it again.
 
+#### Signals on Heroku
+
+When shutting down processes, Heroku sends every process a TERM signal at the
+same time. By default this causes an immediate shutdown of any running job
+leading to frequent `Resque::TermException` errors.  For short running jobs, a simple
+solution is to give a small amount of time for the job to finish
+before killing it.
+
+Resque doesn't handle this out of the box (for both cedar-14 and heroku-16), you need to
+install the [`resque-heroku-signals`](https://github.com/iloveitaly/resque-heroku-signals)
+addon which adds the required signal handling to make the behavior described above work.
+Related issue: https://github.com/resque/resque/issues/1559
+
+To accomplish this set the following environment variables:
+
+* `RESQUE_PRE_SHUTDOWN_TIMEOUT` - The time between the parent receiving a shutdown signal (TERM by default) and it sending that signal on to the child process. Designed to give the child process
+time to complete before being forced to die.
+
+* `TERM_CHILD` - Must be set for `RESQUE_PRE_SHUTDOWN_TIMEOUT` to be used. After the timeout, if the child is still running it will raise a `Resque::TermException` and exit.
+
+* `RESQUE_TERM_TIMEOUT` - By default you have a few seconds to handle `Resque::TermException` in your job. `RESQUE_TERM_TIMEOUT` and `RESQUE_PRE_SHUTDOWN_TIMEOUT` must be lower than the [heroku dyno timeout](https://devcenter.heroku.com/articles/limits#exit-timeout).
+
 ### Mysql::Error: MySQL server has gone away
 
-If your workers remain idle for too long they may lose their MySQL
-connection. If that happens we recommend using [this
-Gist](http://gist.github.com/238999).
+If your workers remain idle for too long they may lose their MySQL connection. Depending on your version of Rails, we recommend the following:
+
+#### Rails 3.x
+In your `perform` method, add the following line:
+
+``` ruby
+class MyTask
+  def self.perform
+    ActiveRecord::Base.verify_active_connections!
+    # rest of your code
+  end
+end
+```
+
+The Rails doc says the following about `verify_active_connections!`:
+
+    Verify active connections and remove and disconnect connections associated with stale threads.
+
+#### Rails 4.x
+
+In your `perform` method, instead of `verify_active_connections!`, use:
+
+``` ruby
+class MyTask
+  def self.perform
+    ActiveRecord::Base.clear_active_connections!
+    # rest of your code
+  end
+end
+```
+
+From the Rails docs on [`clear_active_connections!`](http://api.rubyonrails.org/classes/ActiveRecord/ConnectionAdapters/ConnectionHandler.html#method-i-clear_active_connections-21):
+
+    Returns any connections in use by the current thread back to the pool, and also returns connections to the pool cached by threads that are no longer alive.
+
 
 
 The Front End
@@ -440,7 +548,7 @@ The Front End
 Resque comes with a Sinatra-based front end for seeing what's up with
 your queue.
 
-![The Front End](https://img.skitch.com/20110528-pc67a8qsfapgjxf5gagxd92fcu.png)
+![The Front End](https://camo.githubusercontent.com/64d150a243987ffbc33f588bd6d7722a0bb8d69a/687474703a2f2f7475746f7269616c732e6a756d7073746172746c61622e636f6d2f696d616765732f7265737175655f6f766572766965772e706e67)
 
 ### Standalone
 
@@ -470,8 +578,8 @@ or set the Redis connection string if you need to do something like select a dif
 Using Passenger? Resque ships with a `config.ru` you can use. See
 Phusion's guide:
 
-Apache: <http://www.modrails.com/documentation/Users%20guide%20Apache.html#_deploying_a_rack_based_ruby_application>
-Nginx: <http://www.modrails.com/documentation/Users%20guide%20Nginx.html#deploying_a_rack_app>
+Apache: <https://www.phusionpassenger.com/library/deploy/apache/deploy/ruby/>
+Nginx: <https://www.phusionpassenger.com/library/deploy/nginx/deploy/ruby/>
 
 ### Rack::URLMap
 
@@ -543,48 +651,6 @@ Choose DelayedJob if:
 In no way is Resque a "better" DelayedJob, so make sure you pick the
 tool that's best for your app.
 
-
-Installing Redis
-----------------
-
-Resque requires Redis 0.900 or higher.
-
-Resque uses Redis' lists for its queues. It also stores worker state
-data in Redis.
-
-#### Homebrew
-
-If you're on OS X, Homebrew is the simplest way to install Redis:
-
-    $ brew install redis
-    $ redis-server /usr/local/etc/redis.conf
-
-You now have a Redis daemon running on 6379.
-
-#### Via Resque
-
-Resque includes Rake tasks (thanks to Ezra's redis-rb) that will
-install and run Redis for you:
-
-    $ git clone git://github.com/defunkt/resque.git
-    $ cd resque
-    $ rake redis:install dtach:install
-    $ rake redis:start
-
-Or, if you don't have admin access on your machine:
-
-    $ git clone git://github.com/defunkt/resque.git
-    $ cd resque
-    $ PREFIX=<your_prefix> rake redis:install dtach:install
-    $ rake redis:start
-
-You now have Redis running on 6379. Wait a second then hit ctrl-\ to
-detach and keep it running in the background.
-
-The demo is probably the best way to figure out how to put the parts
-together. But, it's not that hard.
-
-
 Resque Dependencies
 -------------------
 
@@ -619,6 +685,13 @@ to an existing Rakefile):
 ``` ruby
 require 'your/app'
 require 'resque/tasks'
+```
+
+If you're using Rails 5.x, include the following in lib/tasks/resque.rake:
+
+```ruby
+require 'resque/tasks'
+task 'resque:setup' => :environment
 ```
 
 Now:
@@ -662,7 +735,7 @@ Don't forget you can define a `resque:setup` hook in
 
 ### In a Rails 2.x app, as a plugin
 
-    $ ./script/plugin install git://github.com/defunkt/resque
+    $ ./script/plugin install git://github.com/resque/resque
 
 That's it! Resque will automatically be available when your Rails app
 loads.
@@ -675,7 +748,7 @@ Don't forget you can define a `resque:setup` hook in
 `lib/tasks/whatever.rake` that loads the `environment` task every time.
 
 
-### In a Rails 3 app, as a gem
+### In a Rails 3.x or 4.x app, as a gem
 
 First include it in your Gemfile.
 
@@ -733,15 +806,16 @@ Here's our `config/resque.yml`:
     test: localhost:6379
     staging: redis1.se.github.com:6379
     fi: localhost:6379
-    production: redis1.ae.github.com:6379
+    production: <%= ENV['REDIS_URL'] %>
 
 And our initializer:
 
 ``` ruby
 rails_root = ENV['RAILS_ROOT'] || File.dirname(__FILE__) + '/../..'
 rails_env = ENV['RAILS_ENV'] || 'development'
+config_file = rails_root + '/config/resque.yml'
 
-resque_config = YAML.load_file(rails_root + '/config/resque.yml')
+resque_config = YAML::load(ERB.new(IO.read(config_file)).result)
 Resque.redis = resque_config[rails_env]
 ```
 
@@ -764,11 +838,11 @@ Plugins and Hooks
 -----------------
 
 For a list of available plugins see
-<http://wiki.github.com/defunkt/resque/plugins>.
+<http://wiki.github.com/resque/resque/plugins>.
 
 If you'd like to write your own plugin, or want to customize Resque
 using hooks (such as `Resque.after_fork`), see
-[docs/HOOKS.md](http://github.com/defunkt/resque/blob/master/docs/HOOKS.md).
+[docs/HOOKS.md](http://github.com/resque/resque/blob/master/docs/HOOKS.md).
 
 
 Namespaces
@@ -820,8 +894,7 @@ send patches for any tweaks or improvements you can make to it.
 Questions
 ---------
 
-Please add them to the [FAQ](https://github.com/defunkt/resque/wiki/FAQ) or
-ask on the Mailing List. The Mailing List is explained further below
+Please add them to the [FAQ](https://github.com/resque/resque/wiki/FAQ) or open an issue on this repo.
 
 
 Development
@@ -831,7 +904,7 @@ Want to hack on Resque?
 
 First clone the repo and run the tests:
 
-    git clone git://github.com/defunkt/resque.git
+    git clone git://github.com/resque/resque.git
     cd resque
     rake test
 
@@ -853,14 +926,11 @@ it:
 If you get an error requiring any of the dependencies, you may have
 failed to install them or be seeing load path issues.
 
-Feel free to ping the mailing list with your problem and we'll try to
-sort it out.
-
 
 Contributing
 ------------
 
-Read the [Contributing][cb] wiki page first. 
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 Once you've made your great commits:
 
@@ -874,20 +944,16 @@ Once you've made your great commits:
 Mailing List
 ------------
 
-To join the list simply send an email to <resque@librelist.com>. This
-will subscribe you and send you information about your subscription,
-including unsubscribe information.
-
-The archive can be found at <http://librelist.com/browser/resque/>.
+This mailing list is no longer maintained. The archive can be found at <http://librelist.com/browser/resque/>.
 
 
 Meta
 ----
 
-* Code: `git clone git://github.com/defunkt/resque.git`
-* Home: <http://github.com/defunkt/resque>
-* Docs: <http://defunkt.github.com/resque/>
-* Bugs: <http://github.com/defunkt/resque/issues>
+* Code: `git clone git://github.com/resque/resque.git`
+* Home: <http://github.com/resque/resque>
+* Docs: <http://rubydoc.info/gems/resque>
+* Bugs: <http://github.com/resque/resque/issues>
 * List: <resque@librelist.com>
 * Chat: <irc://irc.freenode.net/resque>
 * Gems: <http://gemcutter.org/gems/resque>
@@ -902,7 +968,7 @@ Chris Wanstrath :: chris@ozmm.org :: @defunkt
 
 [0]: http://github.com/blog/542-introducing-resque
 [1]: http://help.github.com/forking/
-[2]: http://github.com/defunkt/resque/issues
+[2]: http://github.com/resque/resque/issues
 [sv]: http://semver.org/
-[rs]: http://github.com/defunkt/redis-namespace
-[cb]: http://wiki.github.com/defunkt/resque/contributing
+[rs]: http://github.com/resque/redis-namespace
+[cb]: http://wiki.github.com/resque/resque/contributing

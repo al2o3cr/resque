@@ -14,6 +14,50 @@ module Resque
   class Job
     include Helpers
     extend Helpers
+    def redis
+      Resque.redis
+    end
+    alias :data_store :redis
+
+    def self.redis
+      Resque.redis
+    end
+
+    def self.data_store
+      self.redis
+    end
+
+    # Given a Ruby object, returns a string suitable for storage in a
+    # queue.
+    def encode(object)
+      Resque.encode(object)
+    end
+
+    # Given a string, returns a Ruby object.
+    def decode(object)
+      Resque.decode(object)
+    end
+
+    # Given a Ruby object, returns a string suitable for storage in a
+    # queue.
+    def self.encode(object)
+      Resque.encode(object)
+    end
+
+    # Given a string, returns a Ruby object.
+    def self.decode(object)
+      Resque.decode(object)
+    end
+    
+    # Given a word with dashes, returns a camel cased version of it.
+    def classify(dashed_word)
+      Resque.classify(dashed_word)
+    end
+
+    # Tries to find a constant with the name specified in the argument string
+    def constantize(camel_cased_word)
+      Resque.constantize(camel_cased_word)
+    end
 
     # Raise Resque::Job::DontPerform from a before_perform hook to
     # abort the job.
@@ -32,6 +76,7 @@ module Resque
     def initialize(queue, payload)
       @queue = queue
       @payload = payload
+      @failure_hooks_ran = false
     end
 
     # Creates a job by placing it on a queue. Expects a string queue
@@ -43,7 +88,9 @@ module Resque
       Resque.validate(klass, queue)
 
       if Resque.inline?
-        constantize(klass).perform(*decode(encode(args)))
+        # Instantiating a Resque::Job and calling perform on it so callbacks run
+        # decode(encode(args)) to ensure that args are normalized in the same manner as a non-inline job
+        new(:inline, {'class' => klass, 'args' => decode(encode(args))}).perform
       else
         Resque.push(queue, :class => klass.to_s, :args => args)
       end
@@ -75,17 +122,16 @@ module Resque
     # a Ruby array before processing.
     def self.destroy(queue, klass, *args)
       klass = klass.to_s
-      queue = "queue:#{queue}"
       destroyed = 0
 
       if args.empty?
-        redis.lrange(queue, 0, -1).each do |string|
+        data_store.everything_in_queue(queue).each do |string|
           if decode(string)['class'] == klass
-            destroyed += redis.lrem(queue, 0, string).to_i
+            destroyed += data_store.remove_from_queue(queue,string).to_i
           end
         end
       else
-        destroyed += redis.lrem(queue, 0, encode(:class => klass, :args => args))
+        destroyed += data_store.remove_from_queue(queue, encode(:class => klass, :args => args))
       end
 
       destroyed
@@ -163,6 +209,19 @@ module Resque
       @payload_class ||= constantize(@payload['class'])
     end
 
+    # Returns the payload class as a string without raising NameError
+    def payload_class_name
+      payload_class.to_s
+    rescue NameError
+      'No Name'
+    end
+
+    def has_payload_class?
+      payload_class != Object
+    rescue NameError
+      false
+    end
+
     # Returns an array of args represented in this job's payload.
     def args
       @payload['args']
@@ -171,12 +230,17 @@ module Resque
     # Given an exception object, hands off the needed parameters to
     # the Failure module.
     def fail(exception)
-      run_failure_hooks(exception)
-      Failure.create \
-        :payload   => payload,
-        :exception => exception,
-        :worker    => worker,
-        :queue     => queue
+      begin
+        run_failure_hooks(exception)
+      rescue Exception => e
+        raise e
+      ensure
+        Failure.create \
+          :payload   => payload,
+          :exception => exception,
+          :worker    => worker,
+          :queue     => queue
+      end
     end
 
     # Creates an identical job, essentially placing this job back on
@@ -210,14 +274,23 @@ module Resque
       @after_hooks ||= Plugin.after_hooks(payload_class)
     end
 
-    def failure_hooks 
+    def failure_hooks
       @failure_hooks ||= Plugin.failure_hooks(payload_class)
     end
-    
-    def run_failure_hooks(exception)
-      job_args = args || []
-      failure_hooks.each { |hook| payload_class.send(hook, exception, *job_args) }
-    end
 
+    def run_failure_hooks(exception)
+      begin
+        job_args = args || []
+        if has_payload_class?
+          failure_hooks.each { |hook| payload_class.send(hook, exception, *job_args) } unless @failure_hooks_ran
+        end
+      rescue Exception => e
+        error_message = "Additional error (#{e.class}: #{e}) occurred in running failure hooks for job #{inspect}\n" \
+                        "Original error that caused job failure was #{e.class}: #{exception.class}: #{exception.message}"
+        raise RuntimeError.new(error_message)
+      ensure
+        @failure_hooks_ran = true
+      end
+    end
   end
 end

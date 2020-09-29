@@ -1,3 +1,195 @@
+## 2.0.0 (2018-11-06)
+
+### Fixed
+* Fix Airbrake failure backend
+* Fix failed jobs page "argument out of range" error
+
+### Changed
+* Remove support for Rubies < 2.3
+* Remove support to Rails < 4
+* Reduce the number of redis calls when trying to get the list of queues
+* Only run `eager_load!` if `Rails.application.config.eager_load` is true
+* Don't display log message if running without hooks
+* Add Support to Redis 4.0
+* Drop complex Redis identifier logic in favor of simple inspect
+* When a child process is killed, report the signal it was terminated with
+* Report a job that pruned worker was processing
+
+### Added
+
+* Allow to configure statistic data store
+
+## 1.27.4 (2017-04-15)
+
+### Fixed
+* Fix issue where removing a failure from Resque web didn't work when using `RedisMultiQueue` backend.
+
+## 1.27.3 (2017-04-10)
+
+### Fixed
+* Fix issue where initializing a data store would attempt to hit Redis, even when Resque.inline = true
+
+## 1.27.2 (2017-02-20)
+
+### Fixed
+* Require "redis/distributed" in worker.rb to allow proper rescuing
+* Fallback to server time if Redis time won't work (restores Redis 2.4 support)
+
+## 1.27.1 (2017-02-13)
+
+### Fixed
+* Show actual jobs names in web view using ActiveJob (@martnst)
+
+## 1.27.0 (2017-02-08)
+
+### Fixed
+* Fix issue where calling Worker.find, Worker.all, or Worker.working from withing
+  a running job would rewrite the PID file with the PID of the forked worker.
+  This causes a change to the Worker#new API that may affect plugin
+  implementations. See Worker#new and Worker#prepare for details. (@jeremywadsack)
+* Workers queried out now have the correct hostname (@crazymykl)
+* Fix race condition on worker startup (@stevedomin)
+* No longer triggers verbose logging if env variables are not set (@ldnunes)
+* resque/failed/requeue/all when using Redis::Failure::Multiple no longer raises an exception (@ale7714)
+* Improve forking to avoid having a child process escape its code (@dylanahsmith)
+* Workers now use server time rather than their own time to maintain heartbeats (@fw42)
+* Run eager load hooks for Rails applications versioned 4.x and up (@abhi-patel)
+* Fix bug when encountering an error while pruning workers (Joakim Kolsjö and Tomas Skogberg)
+* Children write to PIDFILE immediately after forking, fixing issues when reconnecting to Redis is slow (@fimmtiu)
+
+### Changed
+* Update jQuery from 1.3.2 to 1.12.4 (@chrisccerami)
+* No longer user Thread.kill to stop heartbeat (@Sinjo)
+
+### Added
+* Resque Web UI now prompts for confirmation on clearing failed jobs (Markus Olsen)
+* Adds process status to DirtyExit exception when job is killed via signal (@MishaConway)
+
+## 1.26.0 (2016-03-10)
+
+This changelog is a bit incomplete. We will be much stricter about the changelog for
+the next release.
+
+* rake: when BACKGROUND, ensure worker.reconnect after daemonizing (@yaauie)
+* worker: when searching workers, Worker#pid properly reflects pid of the found
+  worker instead of the current pid. (@yaauie)
+* Add support for RESQUE_PROCLINE_PREFIX environment variable to prefix
+  procline strings with a static identifier. (@rbroemeling)
+* Resque::Worker logs errors at the correct logging level (@chrisccerami)
+
+## 1.25.2 (2014-3-3)
+
+* Respect TERM_CHILD setting when not forking (@ggilder)
+* implementation of backend connection with a hash (Andrea Rossi)
+* require yaml for show_args support (@yaauie)
+* use redis-namespace 1.3 (Andrea Rossi)
+* fix DOCS link in README (@cade)
+* Fix worker prune test to actually run its assertion & cover reality. (@yaauie)
+* Eliminate infinite recursion when Resque::Helpers mixed into Resque (@yaml)
+* use ruby, avoid shelling out. google++ (@hone)
+* Failed Assertions Don't Fail Tests :rage: (@yaauie)
+
+## 1.25.1 (2013-9-26)
+
+* Actually require Forwardable from the standard library.
+
+## 1.25.0 (2013-4-16)
+* Updates fork method so [resque-multi-job-forks](https://github.com/stulentsev/resque-multi-job-forks)
+  monkey patching works again. See discussion at https://github.com/defunkt/resque/pull/895 for more
+  context (@jonhyman)
+* Use Redis.pipelined to group batches of redis commands.
+  https://github.com/resque/resque/pull/902 (@jonhyman)
+* Fixed uninitialize constant for the module/class that contains the perform
+  method causing job failures to no be reported, #792 (@sideshowcoder)
+* Fix Resque::Failure::Base.all to have the correct signature.
+  (@rentalutions)
+* Don't close stdio pipes when daemonizing so as to not hide errors. #967
+  (@sideshowcoder)
+* Fix for worker_pids on Windows. #980 (@kzgs)
+* Only prune workers for queues the current worker knows about. #1000
+  (!) (@dsabanin)
+* Handle duplicate TERM signals. #988 (@softwaregravy)
+* Fix issue with exiting workers and unintentionally deregistering the
+  parent when the forked child exits. #1017 (@magec)
+* Fix encoding errors with local date formatting. #1065 (@katafrakt)
+* Fix CI for 1.8.7 and 1.9.2 modes due to dependencies. #1090
+  (@adelcambre)
+* Allow using globs for queue names to listen on, allowing things like
+  listening on `staging_*`. #1085 (@adelcambre)
+
+
+## 1.24.1 (2013-3-23)
+
+* Adds a default value for `per_page` on resque-server for plugins which add tabs (@jonhyman)
+* Fix bad logic on the failed queue adapter
+* Added missing `require 'time'` which was causing occasional errors which
+  would crash workers.
+
+## 1.24.0 (2013-3-21)
+
+* Web UI: Fix regression that caused the failure tab to break when using
+  certain failure backends (@kjg)
+* Web UI: Add page list to queues (@ql)
+* Web UI: Fix regression that caused the failure tab to break when clicking on
+  "clear all failures" under certain failure backends, #859 (@jonhyman)
+* Fix regression for Resque hooks where Resque would error out if you assigned
+  multiple hooks using an array, #859 (@jonhyman)
+* Adds ENV["RUN_AT_EXIT_HOOKS"] which when set to 1 causes any defined
+  `at_exit` hooks to be run on the child when the forked process exits, #862
+  (@jonhyman)
+* Bump up redis-namespace to 1.2.
+* Remove multi_json, the JSON gem does the right thing everywhere now.
+* Documentation fixes with demo instructions.
+* Fixed encoding for worker PIDs on Windows (@kzgs)
+* Cache value of PID in an ivar. This way, if you try to look up worker PIDs
+  from some other process (such as the console), they will be correct.
+* Add a mutex-free logger. Ruby 2.0 does not allow you to use a mutex from
+  a signal handler, which can potentially cause deadlock. Now we're using
+  `mono_logger`, which has no locks.
+
+## 1.23.1 (2013-3-7)
+
+* JRuby and Rubinius are 'allow failure' on CI. This is largely due to Travis
+  weridness and flaky tests.
+* Fix link from "queues" view to "failed" view when there's only one failed
+  queue (trliner)
+* Making all the failure backends have the same method signature for duck
+  typing purposes (jonhyman)
+* Fix log formatters not appending a new line (flavorpill)
+* redirect unauthorized resque-web polling requests to root url (trliner)
+* Various resque-web fixes (@tarcieri)
+* Optional RedisMultiQueue failure backend, can be enabled with
+  FAILURE_BACKEND=redis_multi_queue env var (@tarcieri)
+* resque:failures:sort rake task will migrate an existing "failed" queue into
+  separate failure queues per job queue, allowing an easy migration to
+  the RedisMultiQueue failure backend (@tarcieri)
+* Disable forking completely with FORK_PER_JOB=false env var (@tarcieri)
+* Report a failure when processes are killed with signals (@dylanahsmith)
+* Enable registering of multiple Resque hooks (@panthomakos, @jonhyman)
+
+## 1.23.0 (2012-10-01)
+
+* don't run `before_fork` hook if Resque can't fork (@kjwierenga, @tarcieri, #672, #697)
+* don't run `after_fork` hook if Resque can't fork (@kjwierenga, @tarcieri, #672, #697)
+* retry connecting to redis up to 3 times (@trevorturk, #693)
+* pass exceptions raised by the worker into the Failure backend (@trevorturk, #693)
+
+## 1.22.0 (2012-08-21)
+
+* unregister signal handlers in child process when ENV["TERM_CHILD"] is set (@dylanasmith, #621)
+* new signal handling for TERM. See http://hone.heroku.com/resque/2012/08/21/resque-signals.html. (@wuputah, @yaaule, #638)
+* supports calling perform hooks when using Resque.inline (@jonhyman, #506)
+
+## 1.21.0 (2012-07-02)
+
+* Add a flag to make sure failure hooks are only ran once (jakemack, #546)
+* Support updated MultiJSON API (@twinturbo)
+* Fix worker logging in monit example config (@twinturbo)
+* loosen dependency of redis-namespace to 1.x, support for redis-rb 3.0.x
+* change '%' to '$' in the 'stop program' command for monit
+* UTF8 sanitize exception messages when there's a failure (@brianmario, #507)
+* don't share a redis connection between parent and child (@jsanders, #588)
+
 ## 1.20.0 (2012-02-17)
 
 * Fixed demos for ruby 1.9 (@BMorearty, #445)

@@ -9,14 +9,21 @@ end
 
 if defined? Airbrake
   require 'resque/failure/airbrake'
-  context "Airbrake" do
-    test "should be notified of an error" do
+  describe "Airbrake" do
+    it "should be notified of an error" do
       exception = StandardError.new("BOOM")
       worker = Resque::Worker.new(:test)
       queue = "test"
       payload = {'class' => Object, 'args' => 66}
 
-      Airbrake.expects(:notify_or_ignore).with(
+      notify_method =
+        if Airbrake::AIRBRAKE_VERSION.to_i < 5
+          :notify
+        else
+          :notify_sync
+        end
+
+      Airbrake.expects(notify_method).with(
         exception,
         :parameters => {:payload_class => 'Object', :payload_args => '66'})
 

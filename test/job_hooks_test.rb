@@ -1,6 +1,6 @@
 require 'test_helper'
 
-context "Resque::Job before_perform" do
+describe "Resque::Job before_perform" do
   include PerformJob
 
   class ::BeforePerformJob
@@ -13,7 +13,7 @@ context "Resque::Job before_perform" do
     end
   end
 
-  test "it runs before_perform before perform" do
+  it "it runs before_perform before perform" do
     result = perform_job(BeforePerformJob, history=[])
     assert_equal true, result, "perform returned true"
     assert_equal history, [:before_perform, :perform]
@@ -29,7 +29,7 @@ context "Resque::Job before_perform" do
     end
   end
 
-  test "raises an error and does not perform if before_perform fails" do
+  it "raises an error and does not perform if before_perform fails" do
     history = []
     assert_raises StandardError do
       perform_job(BeforePerformJobFails, history)
@@ -47,14 +47,14 @@ context "Resque::Job before_perform" do
     end
   end
 
-  test "does not perform if before_perform raises Resque::Job::DontPerform" do
+  it "does not perform if before_perform raises Resque::Job::DontPerform" do
     result = perform_job(BeforePerformJobAborts, history=[])
     assert_equal false, result, "perform returned false"
     assert_equal history, [:before_perform], "Only before_perform was run"
   end
 end
 
-context "Resque::Job after_perform" do
+describe "Resque::Job after_perform" do
   include PerformJob
 
   class ::AfterPerformJob
@@ -66,7 +66,7 @@ context "Resque::Job after_perform" do
     end
   end
 
-  test "it runs after_perform after perform" do
+  it "it runs after_perform after perform" do
     result = perform_job(AfterPerformJob, history=[])
     assert_equal true, result, "perform returned true"
     assert_equal history, [:perform, :after_perform]
@@ -82,7 +82,7 @@ context "Resque::Job after_perform" do
     end
   end
 
-  test "raises an error but has already performed if after_perform fails" do
+  it "raises an error but has already performed if after_perform fails" do
     history = []
     assert_raises StandardError do
       perform_job(AfterPerformJobFails, history)
@@ -91,7 +91,7 @@ context "Resque::Job after_perform" do
   end
 end
 
-context "Resque::Job around_perform" do
+describe "Resque::Job around_perform" do
   include PerformJob
 
   class ::AroundPerformJob
@@ -105,7 +105,7 @@ context "Resque::Job around_perform" do
     end
   end
 
-  test "it runs around_perform then yields in order to perform" do
+  it "it runs around_perform then yields in order to perform" do
     result = perform_job(AroundPerformJob, history=[])
     assert_equal true, result, "perform returned true"
     assert_equal history, [:start_around_perform, :perform, :finish_around_perform]
@@ -123,7 +123,7 @@ context "Resque::Job around_perform" do
     end
   end
 
-  test "raises an error and does not perform if around_perform fails before yielding" do
+  it "raises an error and does not perform if around_perform fails before yielding" do
     history = []
     assert_raises StandardError do
       perform_job(AroundPerformJobFailsBeforePerforming, history)
@@ -147,7 +147,7 @@ context "Resque::Job around_perform" do
     end
   end
 
-  test "raises an error but may handle exceptions if perform fails" do
+  it "raises an error but may handle exceptions if perform fails" do
     history = []
     assert_raises StandardError do
       perform_job(AroundPerformJobFailsWhilePerforming, history)
@@ -165,7 +165,7 @@ context "Resque::Job around_perform" do
     end
   end
 
-  test "around_perform is not required to yield" do
+  it "around_perform is not required to yield" do
     history = []
     result = perform_job(AroundPerformJobDoesNotHaveToYield, history)
     assert_equal false, result, "perform returns false"
@@ -173,7 +173,7 @@ context "Resque::Job around_perform" do
   end
 end
 
-context "Resque::Job on_failure" do
+describe "Resque::Job on_failure" do
   include PerformJob
 
   class ::FailureJobThatDoesNotFail
@@ -185,7 +185,7 @@ context "Resque::Job on_failure" do
     end
   end
 
-  test "it does not call on_failure if no failures occur" do
+  it "it does not call on_failure if no failures occur" do
     result = perform_job(FailureJobThatDoesNotFail, history=[])
     assert_equal true, result, "perform returned true"
     assert_equal history, [:perform]
@@ -201,7 +201,7 @@ context "Resque::Job on_failure" do
     end
   end
 
-  test "it calls on_failure with the exception and then re-raises the exception" do
+  it "it calls on_failure with the exception and then re-raises the exception" do
     history = []
     assert_raises StandardError do
       perform_job(FailureJobThatFails, history)
@@ -219,16 +219,26 @@ context "Resque::Job on_failure" do
     end
   end
 
-  test "it calls on_failure even with bad exceptions" do
+  it "it calls on_failure even with bad exceptions" do
     history = []
     assert_raises SyntaxError do
       perform_job(FailureJobThatFailsBadly, history)
     end
     assert_equal history, [:perform, "oh no"]
   end
+
+  it "throws errors with helpful messages if failure occurs during on_failure hooks" do
+    err = assert_raises RuntimeError do
+      perform_job(BadJobWithOnFailureHookFail)
+    end
+    assert_match('Additional error (RuntimeError: This job is just so bad!)', err.message)
+    assert_match('occurred in running failure hooks', err.message)
+    assert_match('for job (Job{testqueue} | BadJobWithOnFailureHookFail | [])', err.message)
+    assert_match('Original error that caused job failure was RuntimeError: SyntaxError: Extra Bad job!', err.message)
+  end
 end
 
-context "Resque::Job after_enqueue" do
+describe "Resque::Job after_enqueue" do
   include PerformJob
 
   class ::AfterEnqueueJob
@@ -241,7 +251,7 @@ context "Resque::Job after_enqueue" do
     end
   end
 
-  test "the after enqueue hook should run" do
+  it "the after enqueue hook should run" do
     history = []
     @worker = Resque::Worker.new(:jobs)
     Resque.enqueue(AfterEnqueueJob, history)
@@ -251,7 +261,7 @@ context "Resque::Job after_enqueue" do
 end
 
 
-context "Resque::Job before_enqueue" do
+describe "Resque::Job before_enqueue" do
   include PerformJob
 
   class ::BeforeEnqueueJob
@@ -274,7 +284,7 @@ context "Resque::Job before_enqueue" do
     end
   end
 
-  test "the before enqueue hook should run" do
+  it "the before enqueue hook should run" do
     history = []
     @worker = Resque::Worker.new(:jobs)
     assert Resque.enqueue(BeforeEnqueueJob, history)
@@ -282,7 +292,8 @@ context "Resque::Job before_enqueue" do
     assert_equal history, [:before_enqueue], "before_enqueue was not run"
   end
 
-  test "a before enqueue hook that returns false should prevent the job from getting queued" do
+  it "a before enqueue hook that returns false should prevent the job from getting queued" do
+    Resque.remove_queue(:jobs)
     history = []
     @worker = Resque::Worker.new(:jobs)
     assert_nil Resque.enqueue(BeforeEnqueueJobAbort, history)
@@ -290,7 +301,7 @@ context "Resque::Job before_enqueue" do
   end
 end
 
-context "Resque::Job after_dequeue" do
+describe "Resque::Job after_dequeue" do
   include PerformJob
 
   class ::AfterDequeueJob
@@ -303,7 +314,7 @@ context "Resque::Job after_dequeue" do
     end
   end
 
-  test "the after dequeue hook should run" do
+  it "the after dequeue hook should run" do
     history = []
     @worker = Resque::Worker.new(:jobs)
     Resque.dequeue(AfterDequeueJob, history)
@@ -313,7 +324,7 @@ context "Resque::Job after_dequeue" do
 end
 
 
-context "Resque::Job before_dequeue" do
+describe "Resque::Job before_dequeue" do
   include PerformJob
 
   class ::BeforeDequeueJob
@@ -336,7 +347,7 @@ context "Resque::Job before_dequeue" do
     end
   end
 
-  test "the before dequeue hook should run" do
+  it "the before dequeue hook should run" do
     history = []
     @worker = Resque::Worker.new(:jobs)
     Resque.dequeue(BeforeDequeueJob, history)
@@ -344,13 +355,13 @@ context "Resque::Job before_dequeue" do
     assert_equal history, [:before_dequeue], "before_dequeue was not run"
   end
 
-  test "a before dequeue hook that returns false should prevent the job from getting dequeued" do
+  it "a before dequeue hook that returns false should prevent the job from getting dequeued" do
     history = []
-    assert_equal nil, Resque.dequeue(BeforeDequeueJobAbort, history)
+    assert_nil Resque.dequeue(BeforeDequeueJobAbort, history)
   end
 end
 
-context "Resque::Job all hooks" do
+describe "Resque::Job all hooks" do
   include PerformJob
 
   class ::VeryHookyJob
@@ -373,7 +384,7 @@ context "Resque::Job all hooks" do
     end
   end
 
-  test "the complete hook order" do
+  it "the complete hook order" do
     result = perform_job(VeryHookyJob, history=[])
     assert_equal true, result, "perform returned true"
     assert_equal history, [
@@ -406,7 +417,7 @@ context "Resque::Job all hooks" do
     end
   end
 
-  test "the complete hook order with a failure at the last minute" do
+  it "the complete hook order with a failure at the last minute" do
     history = []
     assert_raises StandardError do
       perform_job(VeryHookyJobThatFails, history)
@@ -419,5 +430,46 @@ context "Resque::Job all hooks" do
       :after_perform,
       "oh no"
     ]
+  end
+
+  class ::CallbacksInline
+    @queue = :callbacks_inline
+
+    def self.before_perform_record_history(history, count)
+      history << :before_perform
+      count['count'] += 1
+    end
+
+    def self.after_perform_record_history(history, count)
+      history << :after_perform
+      count['count'] += 1
+    end
+
+    def self.around_perform_record_history(history, count)
+      history << :start_around_perform
+      count['count'] += 1
+      yield
+      history << :finish_around_perform
+      count['count'] += 1
+    end
+
+    def self.perform(history, count)
+      history << :perform
+      $history = history
+      $count = count
+    end
+  end
+
+  it "it runs callbacks when inline is true" do
+    begin
+      Resque.inline = true
+      # Sending down two parameters that can be passed and updated by reference
+      result = Resque.enqueue(CallbacksInline, [], {'count' => 0})
+      assert_equal true, result, "perform returned true"
+      assert_equal $history, [:before_perform, :start_around_perform, :perform, :finish_around_perform, :after_perform]
+      assert_equal 4, $count['count']
+    ensure
+      Resque.inline = false
+    end
   end
 end
